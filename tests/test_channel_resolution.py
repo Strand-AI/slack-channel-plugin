@@ -15,11 +15,15 @@ class FakeReadClient:
         }
 
     async def users_info(self, user: str):
-        name = self.users.get(user, user)
+        # External / Slack Connect users often have empty display_name and
+        # real_name but still carry a username. Model that: `users` maps a
+        # user id to the username, exposed only via the top-level "name".
+        username = self.users.get(user, user)
         return {
             "user": {
-                "profile": {"display_name": name},
-                "real_name": name,
+                "profile": {"display_name": "", "real_name": ""},
+                "real_name": "",
+                "name": username,
             },
         }
 
@@ -71,6 +75,27 @@ async def test_resolves_group_dm_by_distinctive_person_substring():
     )
 
     assert await server._resolve_channel_ref("yufan") == "C0BG0HEBHFX"
+
+
+@pytest.mark.asyncio
+async def test_prefers_direct_dm_over_group_dm_for_external_user():
+    # Oded's 1:1 DM with Yufan (external Slack Connect user: only a username,
+    # no display/real name) plus a group DM whose name contains "yufan.liu".
+    # Typing "yufan" must land on the DM, not the group DM.
+    server._read_client = FakeReadClient(
+        [
+            {"id": "D0A8HGFTGJ1", "is_im": True, "user": "U_YUFAN"},
+            {
+                "id": "C0BG0HEBHFX",
+                "name": "mpdm-oded--peter--yufan.liu-1",
+                "is_mpim": True,
+            },
+        ],
+        users={"U_YUFAN": "yufan.liu"},
+    )
+
+    assert await server._resolve_channel_ref("yufan") == "D0A8HGFTGJ1"
+    assert await server._resolve_channel_ref("yufan.liu") == "D0A8HGFTGJ1"
 
 
 @pytest.mark.asyncio
