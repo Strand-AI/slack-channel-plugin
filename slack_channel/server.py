@@ -319,6 +319,9 @@ async def _resolve_channel_ref(channel: str) -> str:
 
     exact_matches: list[tuple[str, str]] = []
     fuzzy_matches: list[tuple[str, str]] = []
+    # Track which matched conversations are 1:1 DMs so a bare person name can
+    # prefer "my DM with Yufan" over a group DM whose name merely contains it.
+    is_im_by_cid: dict[str, bool] = {}
 
     for ch in await _list_conversations_for_resolution():
         cid = ch.get("id", "")
@@ -328,6 +331,7 @@ async def _resolve_channel_ref(channel: str) -> str:
             exact_matches.append((cid, label))
         elif any(query_norm in term for term in normalized_terms):
             fuzzy_matches.append((cid, label))
+        is_im_by_cid[cid] = bool(ch.get("is_im"))
 
     matches = exact_matches or fuzzy_matches
     if not matches:
@@ -341,6 +345,14 @@ async def _resolve_channel_ref(channel: str) -> str:
     for cid, label in matches:
         deduped.setdefault(cid, label)
     matches = list(deduped.items())
+
+    # When a query hits several conversations but exactly one is a 1:1 DM,
+    # prefer it: typing a person's name almost always means their DM, not a
+    # group DM that happens to include them.
+    if len(matches) > 1:
+        im_matches = [(cid, label) for cid, label in matches if is_im_by_cid.get(cid)]
+        if len(im_matches) == 1:
+            return im_matches[0][0]
 
     if len(matches) == 1:
         return matches[0][0]
@@ -806,7 +818,15 @@ async def _resolve_user(user_id: str) -> str:
     try:
         info = await _read_client.users_info(user=user_id)
         profile = info["user"]["profile"]
-        name = profile.get("display_name") or info["user"].get("real_name") or user_id
+        # Fall back to the username before the raw ID: external / Slack Connect
+        # users (e.g. HKU collaborators) often have empty display_name/real_name
+        # but still carry a "name" like "yufan.liu", which is what people type.
+        name = (
+            profile.get("display_name")
+            or info["user"].get("real_name")
+            or info["user"].get("name")
+            or user_id
+        )
         _user_name_cache[user_id] = name
         return name
     except Exception:
