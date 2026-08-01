@@ -1,5 +1,9 @@
 # slack-channel-plugin
 
+> **Outbound only.** The passive Socket Mode listener was removed — this server posts
+> to Slack and reads history, but never pushes inbound messages to an agent. Inbound
+> Slack is handled by QM.
+
 Slack channel plugin for [Claude Code](https://claude.ai/code) — real-time messaging via Socket Mode with per-conversation thread routing.
 
 ## What it does
