@@ -852,6 +852,10 @@ async def _main() -> None:
             server_version="0.1.0",
             capabilities=server.get_capabilities(
                 notification_options=NotificationOptions(),
+                # Required positionally as of mcp 1.29 — omitting it raises
+                # TypeError at startup rather than at import, so the server
+                # only fails once a client actually connects.
+                experimental_capabilities={},
             ),
             instructions=(
                 "Slack channel plugin — outbound only. Use the reply tool to post to a "
