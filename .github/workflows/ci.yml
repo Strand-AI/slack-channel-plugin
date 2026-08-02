@@ -12,7 +12,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
-      - run: uv run ruff check slack_channel/
+      # ruff lives in [project.optional-dependencies].dev, so it needs --extra dev.
+      # Without it uv installs only runtime deps and the step dies on
+      # "Failed to spawn: ruff" — a red main that says nothing about the code.
+      - run: uv run --extra dev ruff check slack_channel/
 
   test:
     runs-on: ubuntu-latest
@@ -24,8 +27,34 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - run: uv sync --dev
-      - run: uv run python -c "from slack_channel.server import server; print('Import OK')"
+      # --dev resolves [dependency-groups]; this project declares its dev deps
+      # under [project.optional-dependencies], so --extra dev is the one that
+      # actually installs them.
+      - run: uv sync --extra dev
+      # Import alone would not have caught the mcp 1.29 breakage: the server
+      # imports fine and only fails when a client connects. Start it and drive a
+      # real initialize + tools/list handshake over stdio instead.
+      - run: |
+          printf '%s\n' \
+            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ci","version":"1"}}}' \
+            '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+            '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
+          | uv run slack-channel 2>/dev/null \
+          | uv run python -c '
+          import json, sys
+          tools = None
+          for line in sys.stdin:
+              line = line.strip()
+              if not line.startswith("{"):
+                  continue
+              got = json.loads(line).get("result", {}).get("tools")
+              if got is not None:
+                  tools = got
+          assert tools, "server never returned a tools/list result"
+          print(f"handshake OK, {len(tools)} tools")
+          '
+        env:
+          SLACK_BOT_TOKEN: xoxb-ci-placeholder
 
   build:
     runs-on: ubuntu-latest
