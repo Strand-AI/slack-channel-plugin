@@ -15,7 +15,9 @@ classifiers = [
 ]
 
 dependencies = [
-    "mcp>=1.26.0",
+    # mcp 2.x moved the lowlevel Server API (no .list_tools), so the module fails to
+    # import outright on a fresh resolve. Cap until the server is ported.
+    "mcp>=1.26.0,<2",
     "slack-sdk>=3.27.0",
     "slack-bolt>=1.18.0",
     "aiohttp>=3.9.0",
