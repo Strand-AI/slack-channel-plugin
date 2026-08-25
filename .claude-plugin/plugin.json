@@ -1,6 +1,6 @@
 {
   "name": "slack-channel",
-  "description": "Slack channel plugin for Claude Code — real-time messaging via Socket Mode with per-conversation thread routing.",
+  "description": "Outbound Slack MCP server for messages, history, files, and workspace search.",
   "version": "0.1.9",
   "author": {
     "name": "Oded Falik"

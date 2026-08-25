@@ -54,12 +54,12 @@ async def test_channel_id_passthrough():
 @pytest.mark.asyncio
 async def test_resolves_direct_dm_by_display_name():
     server._read_client = FakeReadClient(
-        [{"id": "D0A0N5DCSMQ", "is_im": True, "user": "U_YUE"}],
-        users={"U_YUE": "Yue"},
+        [{"id": "D111", "is_im": True, "user": "U_ALICE"}],
+        users={"U_ALICE": "Alice"},
     )
 
-    assert await server._resolve_channel_ref("@Yue") == "D0A0N5DCSMQ"
-    assert await server._resolve_channel_ref("Yue") == "D0A0N5DCSMQ"
+    assert await server._resolve_channel_ref("@Alice") == "D111"
+    assert await server._resolve_channel_ref("Alice") == "D111"
 
 
 @pytest.mark.asyncio
@@ -67,48 +67,47 @@ async def test_resolves_group_dm_by_distinctive_person_substring():
     server._read_client = FakeReadClient(
         [
             {
-                "id": "C0BG0HEBHFX",
-                "name": "mpdm-oded--peter--yufan.liu-1",
+                "id": "G111",
+                "name": "mpdm-owner--bob--carol.smith-1",
                 "is_mpim": True,
             }
         ]
     )
 
-    assert await server._resolve_channel_ref("yufan") == "C0BG0HEBHFX"
+    assert await server._resolve_channel_ref("carol") == "G111"
 
 
 @pytest.mark.asyncio
 async def test_prefers_direct_dm_over_group_dm_for_external_user():
-    # Oded's 1:1 DM with Yufan (external Slack Connect user: only a username,
-    # no display/real name) plus a group DM whose name contains "yufan.liu".
-    # Typing "yufan" must land on the DM, not the group DM.
+    # An external Slack Connect user may have only a username. Typing their
+    # distinctive name should choose the direct DM over a matching group DM.
     server._read_client = FakeReadClient(
         [
-            {"id": "D0A8HGFTGJ1", "is_im": True, "user": "U_YUFAN"},
+            {"id": "D222", "is_im": True, "user": "U_CAROL"},
             {
-                "id": "C0BG0HEBHFX",
-                "name": "mpdm-oded--peter--yufan.liu-1",
+                "id": "G111",
+                "name": "mpdm-owner--bob--carol.smith-1",
                 "is_mpim": True,
             },
         ],
-        users={"U_YUFAN": "yufan.liu"},
+        users={"U_CAROL": "carol.smith"},
     )
 
-    assert await server._resolve_channel_ref("yufan") == "D0A8HGFTGJ1"
-    assert await server._resolve_channel_ref("yufan.liu") == "D0A8HGFTGJ1"
+    assert await server._resolve_channel_ref("carol") == "D222"
+    assert await server._resolve_channel_ref("carol.smith") == "D222"
 
 
 @pytest.mark.asyncio
 async def test_ambiguous_fuzzy_match_lists_human_labels():
     server._read_client = FakeReadClient(
         [
-            {"id": "C111", "name": "mpdm-oded--peter--yufan.liu-1", "is_mpim": True},
-            {"id": "C222", "name": "mpdm-oded--peter--yue-1", "is_mpim": True},
+            {"id": "G111", "name": "mpdm-owner--bob--carol.smith-1", "is_mpim": True},
+            {"id": "G222", "name": "mpdm-owner--bob--alice-1", "is_mpim": True},
         ]
     )
 
-    with pytest.raises(ValueError, match="Ambiguous channel or DM 'peter'"):
-        await server._resolve_channel_ref("peter")
+    with pytest.raises(ValueError, match="Ambiguous channel or DM 'bob'"):
+        await server._resolve_channel_ref("bob")
 
 
 @pytest.mark.asyncio
@@ -116,12 +115,12 @@ async def test_list_channels_shows_copyable_name_labels():
     server._read_client = FakeReadClient(
         [
             {"id": "CENG", "name": "engineering", "num_members": 3},
-            {"id": "DYUE", "is_im": True, "user": "U_YUE"},
+            {"id": "D333", "is_im": True, "user": "U_ALICE"},
         ],
-        users={"U_YUE": "Yue"},
+        users={"U_ALICE": "Alice"},
     )
 
     [result] = await server._handle_list_channels({"limit": 20})
 
     assert 'use channel="#engineering"' in result.text
-    assert 'use channel="@Yue"' in result.text
+    assert 'use channel="@Alice"' in result.text

@@ -15,7 +15,7 @@ jobs:
       # ruff lives in [project.optional-dependencies].dev, so it needs --extra dev.
       # Without it uv installs only runtime deps and the step dies on
       # "Failed to spawn: ruff" — a red main that says nothing about the code.
-      - run: uv run --extra dev ruff check slack_channel/
+      - run: uv run --extra dev ruff check slack_channel/ tests/
 
   test:
     runs-on: ubuntu-latest
@@ -31,6 +31,7 @@ jobs:
       # under [project.optional-dependencies], so --extra dev is the one that
       # actually installs them.
       - run: uv sync --extra dev
+      - run: uv run python -m pytest -q
       # Import alone would not have caught the mcp 1.29 breakage: the server
       # imports fine and only fails when a client connects. Start it and drive a
       # real initialize + tools/list handshake over stdio instead.
