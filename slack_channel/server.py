@@ -516,7 +516,7 @@ async def list_tools() -> list[types.Tool]:
                 "properties": {
                     "file_id": {
                         "type": "string",
-                        "description": "Slack file id (e.g. F0BGSTS7HKJ), from a message's fetch_file annotation.",
+                        "description": "Slack file id (e.g. F123ABC), from a message's fetch_file annotation.",
                     },
                 },
                 "required": ["file_id"],
@@ -753,8 +753,9 @@ async def _handle_search_messages(args: dict) -> list[types.TextContent]:
             text=(
                 "Error: search_messages requires SLACK_USER_TOKEN (xoxp) with the "
                 "search:read user scope. Bot tokens cannot call Slack workspace search. "
-                "Add search:read under OAuth & Permissions → User Token Scopes, reinstall "
-                "the app, then update SLACK_USER_TOKEN and restart the MCP server."
+                "Under OAuth & Permissions → User Token Scopes, add search:read plus the "
+                "history/read/files/users scopes documented in the README, reinstall the "
+                "app, then update SLACK_USER_TOKEN and restart the MCP server."
             ),
         )]
 

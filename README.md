@@ -96,8 +96,11 @@ claude --dangerously-load-development-channels server:slack-channel
 Slack's historical message search is user-authorized. To add it to an existing app:
 
 1. Open <https://api.slack.com/apps>, select the app, and open **OAuth & Permissions**.
-2. Under **Scopes → User Token Scopes**, add `search:read`.
-3. Click **Reinstall to Workspace** at the top of the page and approve the new permission.
+2. Under **Scopes → User Token Scopes**, ensure the token has `search:read` plus the read scopes
+   used by the other tools: `channels:history`, `channels:read`, `files:read`, `groups:history`,
+   `groups:read`, `im:history`, `im:read`, `mpim:history`, `mpim:read`, and `users:read`. If the
+   existing user token already has those read scopes, only `search:read` is new.
+3. Click **Reinstall to Workspace** at the top of the page and approve the permissions.
 4. Copy the resulting **User OAuth Token** (`xoxp-...`). Do not use the Bot User OAuth Token.
 5. Set `SLACK_USER_TOKEN=xoxp-...` in `~/.claude/channels/slack-channel/.env`.
 6. Restart Claude Code or the MCP host so the server reloads the token.
@@ -163,7 +166,7 @@ Tools that take a `channel` argument accept human-readable references and Slack 
 | DM label | `@Alice` |
 | Person name | `Alice` |
 | Distinctive DM/group-DM substring | `alice` |
-| Slack ID | `C0AAWT14XT4` |
+| Slack ID | `C123ABC` |
 
 Prefer names in agent workflows. `list_channels` prints copyable `use channel="..."` labels; IDs
 remain available for debugging and exact thread calls.

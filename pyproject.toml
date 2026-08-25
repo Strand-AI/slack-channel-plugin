@@ -1,7 +1,7 @@
 [project]
 name = "slack-channel-plugin"
 version = "0.1.9"
-description = "Slack channel plugin for Claude Code — real-time messaging via Socket Mode"
+description = "Outbound Slack MCP server for messages, history, files, and workspace search"
 license = {text = "Apache-2.0"}
 requires-python = ">=3.10"
 authors = [{ name = "Oded Falik" }]

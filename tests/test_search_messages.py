@@ -145,6 +145,7 @@ async def test_search_without_user_token_returns_actionable_setup_error():
 
     assert "SLACK_USER_TOKEN (xoxp)" in result.text
     assert "search:read" in result.text
+    assert "history/read/files/users scopes" in result.text
     assert "reinstall" in result.text
     assert "Bot tokens cannot" in result.text
 
