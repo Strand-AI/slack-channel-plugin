@@ -11,82 +11,63 @@ allowed-tools:
 
 # Slack Channel Plugin Configuration
 
-You are helping the user configure their Slack credentials for the slack-channel plugin.
+Help the user configure credentials at:
 
-## Credentials Location
+`~/.claude/channels/slack-channel/.env`
 
-Credentials are stored at: `~/.claude/channels/slack-channel/.env`
+## Show status when no arguments are provided
 
-## Handle the user's request
+Report whether each value is set, with token values masked:
 
-### If no arguments provided — show status:
+- `SLACK_BOT_TOKEN` — required `xoxb` token for messages and reactions
+- `SLACK_USER_TOKEN` — recommended `xoxp` token for broad reads; required for workspace search
+- `SLACK_CHANNEL_ID` — optional default channel for `reply`
 
-1. Check if `~/.claude/channels/slack-channel/.env` exists
-2. If it does, show which vars are set (mask the values):
-   - `SLACK_BOT_TOKEN` — required
-   - `SLACK_APP_TOKEN` — required for real-time notifications
-   - `SLACK_CHANNEL_ID` — optional, filters to one channel
-3. Show connection status if the MCP server is running
+`SLACK_APP_TOKEN` is not used. This outbound-only MCP server does not use Socket Mode.
 
-### If the user provides tokens — save them:
+## Save credentials
 
-Write to `~/.claude/channels/slack-channel/.env`:
-```
+Preserve existing values the user did not ask to change. Write the requested values in dotenv
+format:
+
+```dotenv
 SLACK_BOT_TOKEN=xoxb-...
-SLACK_APP_TOKEN=xapp-...
+SLACK_USER_TOKEN=xoxp-...
 SLACK_CHANNEL_ID=C...  # optional
 ```
 
-### If the user says "clear" — remove credentials:
+Never put tokens in the repository. Restart Claude Code or the MCP host after changing the file.
 
-Delete `~/.claude/channels/slack-channel/.env`.
+## Clear credentials
 
-## Setup Instructions (show if no credentials configured)
+If the user says `clear`, remove `~/.claude/channels/slack-channel/.env`.
 
-To set up the Slack channel plugin:
+## Slack app setup
 
-1. **Create a Slack App** at https://api.slack.com/apps → "Create New App" → "From an app manifest"
+1. Create or select an app at <https://api.slack.com/apps>.
+2. Under **OAuth & Permissions → Bot Token Scopes**, add:
+   - `chat:write`
+   - `reactions:write`
+   - `channels:history`, `channels:read`
+   - `groups:history`, `groups:read`
+   - `im:history`, `im:read`
+   - `mpim:history`, `mpim:read`
+   - `files:read`, `users:read`
+3. Under **OAuth & Permissions → User Token Scopes**, add:
+   - `search:read`
+   - `channels:history`, `channels:read`
+   - `groups:history`, `groups:read`
+   - `im:history`, `im:read`
+   - `mpim:history`, `mpim:read`
+   - `files:read`, `users:read`
+4. Click **Install to Workspace** or **Reinstall to Workspace** and approve the scopes.
+5. Copy the **Bot User OAuth Token** (`xoxb-...`) into `SLACK_BOT_TOKEN`.
+6. Copy the **User OAuth Token** (`xoxp-...`) into `SLACK_USER_TOKEN`.
+7. Restart Claude Code or the MCP host.
 
-2. **Use this manifest** (paste into the YAML tab):
-```yaml
-display_information:
-  name: Claude Code
-  description: Claude Code channel plugin
-settings:
-  socket_mode_enabled: true
-  token_rotation_enabled: false
-  org_deploy_enabled: false
-oauth_config:
-  scopes:
-    bot:
-      - channels:history
-      - channels:read
-      - chat:write
-      - groups:history
-      - groups:read
-      - reactions:read
-      - reactions:write
-      - users:read
-features:
-  bot_user:
-    display_name: Claude Code
-    always_online: true
-  app_home:
-    messages_tab_enabled: true
-event_subscriptions:
-  bot_events:
-    - message.channels
-    - message.groups
-```
+## Search authorization
 
-3. **Install to workspace** → OAuth & Permissions → Install
-
-4. **Get tokens**:
-   - Bot Token: OAuth & Permissions → Bot User OAuth Token (`xoxb-...`)
-   - App Token: Basic Information → App-Level Tokens → Generate (`xapp-...`, needs `connections:write` scope)
-
-5. **Configure**: `/slack-channel:configure <bot-token> <app-token>`
-
-6. **Optional**: Add a channel filter: `/slack-channel:configure channel <channel-id>`
-
-7. **Restart Claude Code** to pick up the new credentials.
+Slack workspace search uses `search.messages`, which only accepts a user `xoxp` token with
+`search:read`. A bot `xoxb` token cannot search workspace history. If search reports
+`missing_scope`, add `search:read` under **User Token Scopes**, reinstall the app, copy the resulting
+User OAuth Token, update `SLACK_USER_TOKEN`, and restart the MCP server.

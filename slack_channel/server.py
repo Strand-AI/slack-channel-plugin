@@ -21,6 +21,7 @@ import sys
 import time
 import urllib.request
 from contextlib import AsyncExitStack
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +50,7 @@ logger = logging.getLogger("slack-channel")
 _session: ServerSession | None = None
 _slack_client: Any = None  # AsyncWebClient (bot token) — used for writes + notifications
 _read_client: Any = None   # AsyncWebClient (user xoxp token if set, else falls back to bot) — used for reads
+_search_client: Any = None  # AsyncWebClient (user xoxp token only) — workspace-wide search
 _bot_user_id: str | None = None
 _user_name_cache: dict[str, str] = {}
 
@@ -434,6 +436,61 @@ async def list_tools() -> list[types.Tool]:
             },
         ),
         types.Tool(
+            name="search_messages",
+            description=(
+                "Search message history across the Slack workspace using Slack search syntax. "
+                "Examples: 'roadmap', 'from:@alice in:project', "
+                "'after:2026-01-01 before:2026-02-01 has:link'. Returns channel labels, "
+                "timestamps, permalinks, and bounded thread context. This calls Slack's search "
+                "API rather than scanning recent history and requires SLACK_USER_TOKEN with "
+                "the search:read user scope."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Slack search query, including any native search modifiers.",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 100,
+                        "description": "Results per page (default 20, max 100).",
+                    },
+                    "page": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 100,
+                        "description": "Result page, 1-indexed (default 1, max 100).",
+                    },
+                    "sort": {
+                        "type": "string",
+                        "enum": ["score", "timestamp"],
+                        "description": "Sort matches by relevance score (default) or timestamp.",
+                    },
+                    "sort_dir": {
+                        "type": "string",
+                        "enum": ["asc", "desc"],
+                        "description": "Sort direction (default desc).",
+                    },
+                    "include_thread_context": {
+                        "type": "boolean",
+                        "description": (
+                            "Include bounded context for up to five matched threads (default true)."
+                        ),
+                    },
+                    "thread_context_limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 20,
+                        "description": "Messages shown per included thread (default 6, max 20).",
+                    },
+                },
+                "required": ["query"],
+            },
+        ),
+        types.Tool(
             name="get_thread",
             description="Get all replies in a Slack thread",
             inputSchema={
@@ -485,6 +542,7 @@ async def call_tool(
         "remove_reaction": _handle_remove_reaction,
         "list_channels": _handle_list_channels,
         "read_history": _handle_read_history,
+        "search_messages": _handle_search_messages,
         "get_thread": _handle_get_thread,
         "fetch_file": _handle_fetch_file,
         "debug": _handle_debug,
@@ -590,6 +648,225 @@ async def _handle_read_history(args: dict) -> list[types.TextContent]:
             thread_indicator = f" [{msg['reply_count']} replies]"
         lines.append(f"[{ts}] {user}: {text}{thread_indicator}")
     return [types.TextContent(type="text", text="\n".join(lines) or "No messages.")]
+
+
+_SEARCH_HIGHLIGHT_START = "\ue000"
+_SEARCH_HIGHLIGHT_END = "\ue001"
+_MAX_CONTEXT_THREADS = 5
+_MAX_THREAD_CONTEXT_MESSAGES = 500
+
+
+def _bounded_integer_arg(
+    args: dict, name: str, default: int, minimum: int, maximum: int,
+) -> tuple[int | None, str | None]:
+    value = args.get(name, default)
+    if isinstance(value, bool) or not isinstance(value, int) or not minimum <= value <= maximum:
+        return None, f"{name} must be an integer from {minimum} to {maximum}"
+    return value, None
+
+
+def _format_slack_timestamp(ts: str) -> str:
+    try:
+        value = datetime.fromtimestamp(float(ts), tz=timezone.utc)
+        return value.strftime("%Y-%m-%d %H:%M:%S UTC")
+    except (TypeError, ValueError, OSError):
+        return "unknown time"
+
+
+def _clean_search_text(text: str) -> str:
+    return text.replace(_SEARCH_HIGHLIGHT_START, "").replace(_SEARCH_HIGHLIGHT_END, "")
+
+
+async def _search_channel_label(match: dict) -> tuple[str, str]:
+    channel = match.get("channel") or {}
+    channel_id = channel.get("id", "") or "?"
+    name = channel.get("name", "") or ""
+    if match.get("type") == "im" or channel_id.startswith("D"):
+        if name.startswith("U"):
+            return f"@{await _resolve_user(name)}", channel_id
+        return f"@{name or channel_id}", channel_id
+    if channel.get("is_mpim"):
+        return f"#{name or channel_id}", channel_id
+    return f"#{name or channel_id}", channel_id
+
+
+async def _fetch_thread_messages(channel_id: str, root_ts: str) -> list[dict] | None:
+    messages: list[dict] = []
+    cursor: str | None = None
+    try:
+        while len(messages) < _MAX_THREAD_CONTEXT_MESSAGES:
+            kwargs: dict[str, Any] = {
+                "channel": channel_id,
+                "ts": root_ts,
+                "limit": min(100, _MAX_THREAD_CONTEXT_MESSAGES - len(messages)),
+            }
+            if cursor:
+                kwargs["cursor"] = cursor
+            response = await _read_client.conversations_replies(**kwargs)
+            messages.extend(response.get("messages", []))
+            cursor = response.get("response_metadata", {}).get("next_cursor") or None
+            if not cursor:
+                break
+        return messages
+    except Exception as e:
+        logger.warning("Could not fetch context for Slack thread %s/%s: %s", channel_id, root_ts, e)
+        return None
+
+
+async def _format_thread_context(
+    messages: list[dict], match_ts: str, display_limit: int,
+) -> list[str]:
+    """Return a small window from a matched thread, centered on the match when possible."""
+    if not messages:
+        return []
+    match_index = next(
+        (index for index, message in enumerate(messages) if message.get("ts") == match_ts),
+        None,
+    )
+    if match_index is None:
+        return [
+            "   Thread context did not include the matched message within the "
+            f"{_MAX_THREAD_CONTEXT_MESSAGES}-message retrieval cap; open its permalink."
+        ]
+
+    start = max(0, match_index - display_limit // 2)
+    start = min(start, max(0, len(messages) - display_limit))
+    selected = messages[start:start + display_limit]
+
+    lines = [f"  Thread context ({len(selected)} messages):"]
+    for message in selected:
+        user = await _resolve_user(message.get("user", ""))
+        ts = message.get("ts", "")
+        marker = "→" if ts == match_ts else " "
+        text = _clean_search_text(message.get("text", "")) + _file_annotations(message)
+        lines.append(f"  {marker} [{ts}] {user}: {text}")
+    return lines
+
+
+async def _handle_search_messages(args: dict) -> list[types.TextContent]:
+    query_arg = args.get("query")
+    if not isinstance(query_arg, str) or not query_arg.strip():
+        return [types.TextContent(type="text", text="Error: query must be a non-empty string.")]
+    query = query_arg.strip()
+    if _search_client is None:
+        return [types.TextContent(
+            type="text",
+            text=(
+                "Error: search_messages requires SLACK_USER_TOKEN (xoxp) with the "
+                "search:read user scope. Bot tokens cannot call Slack workspace search. "
+                "Add search:read under OAuth & Permissions → User Token Scopes, reinstall "
+                "the app, then update SLACK_USER_TOKEN and restart the MCP server."
+            ),
+        )]
+
+    limit, error = _bounded_integer_arg(args, "limit", 20, 1, 100)
+    if error:
+        return [types.TextContent(type="text", text=f"Error: {error}.")]
+    page, error = _bounded_integer_arg(args, "page", 1, 1, 100)
+    if error:
+        return [types.TextContent(type="text", text=f"Error: {error}.")]
+    thread_context_limit, error = _bounded_integer_arg(
+        args, "thread_context_limit", 6, 1, 20,
+    )
+    if error:
+        return [types.TextContent(type="text", text=f"Error: {error}.")]
+
+    sort = args.get("sort", "score")
+    sort_dir = args.get("sort_dir", "desc")
+    include_context = args.get("include_thread_context", True)
+    if not isinstance(sort, str) or sort not in {"score", "timestamp"}:
+        return [types.TextContent(type="text", text="Error: sort must be score or timestamp.")]
+    if not isinstance(sort_dir, str) or sort_dir not in {"asc", "desc"}:
+        return [types.TextContent(type="text", text="Error: sort_dir must be asc or desc.")]
+    if not isinstance(include_context, bool):
+        return [types.TextContent(
+            type="text", text="Error: include_thread_context must be a boolean.",
+        )]
+
+    try:
+        response = await _search_client.search_messages(
+            query=query,
+            count=limit,
+            page=page,
+            sort=sort,
+            sort_dir=sort_dir,
+            highlight=False,
+        )
+    except Exception as e:
+        response_data = getattr(getattr(e, "response", None), "data", {}) or {}
+        if response_data.get("error") == "missing_scope":
+            text = (
+                "Error: SLACK_USER_TOKEN is missing search:read. Add search:read under "
+                "OAuth & Permissions → User Token Scopes, reinstall the Slack app, replace "
+                "SLACK_USER_TOKEN with the new xoxp token, and restart the MCP server."
+            )
+        elif response_data.get("error") == "not_allowed_token_type":
+            text = (
+                "Error: Slack workspace search requires a user xoxp token; bot xoxb tokens "
+                "cannot call search.messages. Configure SLACK_USER_TOKEN with search:read."
+            )
+        else:
+            text = f"Error: Slack message search failed: {response_data.get('error') or e}"
+        return [types.TextContent(type="text", text=text)]
+
+    payload = response.get("messages", {})
+    matches = payload.get("matches", [])
+    pagination = payload.get("pagination", {}) or payload.get("paging", {})
+    total = payload.get("total", pagination.get("total_count", pagination.get("total", len(matches))))
+    page_count = pagination.get("page_count", pagination.get("pages"))
+    current_page = pagination.get("page", page)
+
+    header = f"Found {total} matches; showing {len(matches)} on page {current_page}"
+    if page_count:
+        header += f" of {page_count}"
+    header += f" (sort={sort} {sort_dir})."
+    lines = [header]
+    context_cache: dict[tuple[str, str], list[dict] | None] = {}
+
+    for index, match in enumerate(matches, start=1):
+        label, channel_id = await _search_channel_label(match)
+        user_id = match.get("user", "")
+        user = await _resolve_user(user_id) if user_id else (match.get("username") or "unknown")
+        ts = match.get("ts", "")
+        text = _clean_search_text(match.get("text", "")) + _file_annotations(match)
+        permalink = match.get("permalink") or "unavailable"
+        lines.extend([
+            "",
+            f"{index}. [{_format_slack_timestamp(ts)} · ts={ts}] {label} ({channel_id}) — {user}",
+            f"   {text}",
+            f"   permalink: {permalink}",
+        ])
+
+        root_ts = match.get("thread_ts") or (ts if match.get("reply_count") else None)
+        if not root_ts:
+            continue
+        lines.append(
+            f'   thread: use get_thread channel="{channel_id}" thread_ts="{root_ts}"'
+        )
+        key = (channel_id, root_ts)
+        if not include_context:
+            continue
+        if key not in context_cache and len(context_cache) < _MAX_CONTEXT_THREADS:
+            context_cache[key] = await _fetch_thread_messages(channel_id, root_ts)
+        if key not in context_cache:
+            lines.append("   Thread context omitted (five-thread response cap).")
+        elif context_cache[key] is None:
+            lines.append("   Thread context unavailable; use get_thread with the values above.")
+        else:
+            lines.extend(await _format_thread_context(
+                context_cache[key] or [], ts, thread_context_limit,
+            ))
+
+    if not matches:
+        lines.append("No messages matched this Slack search query.")
+    elif page_count and current_page < min(page_count, 100):
+        lines.extend(["", f"Next page: call search_messages again with page={current_page + 1}."])
+    elif page_count and page_count > 100 and current_page >= 100:
+        lines.extend([
+            "",
+            "Slack search exposes at most 100 pages; refine the query to reach more results.",
+        ])
+    return [types.TextContent(type="text", text="\n".join(lines))]
 
 
 async def _handle_get_thread(args: dict) -> list[types.TextContent]:
@@ -812,7 +1089,7 @@ REACT_PREFIX = "REACT:"
 # ---------------------------------------------------------------------------
 
 async def _main() -> None:
-    global _session, _slack_client, _read_client, _bot_user_id
+    global _session, _slack_client, _read_client, _search_client, _bot_user_id
 
     logging.basicConfig(
         level=logging.INFO,
@@ -833,7 +1110,8 @@ async def _main() -> None:
     # everything Oded can see — including DMs the bot was never invited to.
     # Writes and reactions stay on the bot token above (messages post as @Golem).
     user_token = os.environ.get("SLACK_USER_TOKEN")
-    _read_client = AsyncWebClient(token=user_token) if user_token else _slack_client
+    _search_client = AsyncWebClient(token=user_token) if user_token else None
+    _read_client = _search_client or _slack_client
     if user_token:
         logger.info("SLACK_USER_TOKEN set — reads use user (xoxp) token; writes use bot token")
     else:
@@ -859,7 +1137,7 @@ async def _main() -> None:
             ),
             instructions=(
                 "Slack channel plugin — outbound only. Use the reply tool to post to a "
-                "channel or thread, and read_history / get_thread to read. This server "
+                "channel or thread, and read_history / search_messages / get_thread to read. This server "
                 "does not listen for Slack messages and will never push anything to you; "
                 "inbound Slack is handled by QM. Threads you reply in are tracked per "
                 "conversation and survive --resume."
