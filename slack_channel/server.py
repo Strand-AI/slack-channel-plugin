@@ -5,9 +5,8 @@ It does not listen: there is no Socket Mode connection, no event bus and no
 cold-reply path.
 
 The passive listener was removed deliberately. It spawned a `claude -p` for every
-unowned message in a watched channel, which was expensive, answered people who
-were not talking to us, and is superseded by QM — which handles inbound Slack
-properly, with per-person scopes and its own turn detection.
+unowned message in a watched channel, which was expensive and could answer people
+who were not talking to the agent. Inbound Slack is handled outside this plugin.
 """
 
 from __future__ import annotations
@@ -271,8 +270,8 @@ async def _resolve_channel_ref(channel: str) -> str:
     """Resolve a human Slack channel reference to a conversation ID.
 
     Accepts Slack conversation IDs plus human forms such as "#general",
-    "general", "@Yue", "Yue", "yufan", or an exact group-DM label. A single
-    distinctive substring is allowed so requests like "check my DMs with yufan"
+    "general", "@alice", "Alice", or an exact group-DM label. A single
+    distinctive substring is allowed so requests like "check my DMs with alice"
     can succeed without forcing the agent to copy opaque IDs.
     """
     query = _clean_channel_ref(channel)
@@ -288,7 +287,7 @@ async def _resolve_channel_ref(channel: str) -> str:
     exact_matches: list[tuple[str, str]] = []
     fuzzy_matches: list[tuple[str, str]] = []
     # Track which matched conversations are 1:1 DMs so a bare person name can
-    # prefer "my DM with Yufan" over a group DM whose name merely contains it.
+    # prefer a direct conversation over a group DM whose name merely contains it.
     is_im_by_cid: dict[str, bool] = {}
 
     for ch in await _list_conversations_for_resolution():
@@ -352,7 +351,7 @@ async def list_tools() -> list[types.Tool]:
                         "type": "string",
                         "description": (
                             "Channel/DM name or ID. Prefer human names: #general, general, "
-                            "@Yue, Yue, yufan, or an exact group-DM label. "
+                            "@alice, Alice, or an exact group-DM label. "
                             "Defaults to SLACK_CHANNEL_ID env var."
                         ),
                     },
@@ -372,7 +371,7 @@ async def list_tools() -> list[types.Tool]:
                 "properties": {
                     "channel": {
                         "type": "string",
-                        "description": "Channel/DM name or ID. Prefer names like #general, @Yue, or yufan.",
+                        "description": "Channel/DM name or ID. Prefer names like #general or @alice.",
                     },
                     "timestamp": {"type": "string", "description": "Message timestamp"},
                     "reaction": {
@@ -391,7 +390,7 @@ async def list_tools() -> list[types.Tool]:
                 "properties": {
                     "channel": {
                         "type": "string",
-                        "description": "Channel/DM name or ID. Prefer names like #general, @Yue, or yufan.",
+                        "description": "Channel/DM name or ID. Prefer names like #general or @alice.",
                     },
                     "timestamp": {"type": "string", "description": "Message timestamp"},
                     "reaction": {
@@ -420,15 +419,15 @@ async def list_tools() -> list[types.Tool]:
             name="read_history",
             description=(
                 "Read recent messages from a Slack channel, DM, or group DM. "
-                "The channel field accepts names such as #general, general, @Yue, Yue, "
-                "yufan, exact group-DM labels, or Slack IDs. Prefer names."
+                "The channel field accepts names such as #general, general, @alice, Alice, "
+                "exact group-DM labels, or Slack IDs. Prefer names."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "channel": {
                         "type": "string",
-                        "description": "Channel/DM name or ID. Prefer names like #general, @Yue, or yufan.",
+                        "description": "Channel/DM name or ID. Prefer names like #general or @alice.",
                     },
                     "limit": {"type": "integer", "description": "Max messages (default 25)"},
                 },
@@ -498,7 +497,7 @@ async def list_tools() -> list[types.Tool]:
                 "properties": {
                     "channel": {
                         "type": "string",
-                        "description": "Channel/DM name or ID. Prefer names like #general, @Yue, or yufan.",
+                        "description": "Channel/DM name or ID. Prefer names like #general or @alice.",
                     },
                     "thread_ts": {"type": "string", "description": "Thread timestamp"},
                 },
@@ -932,7 +931,7 @@ async def _handle_debug(args: dict) -> list[types.TextContent]:
 _FILE_CACHE_DIR = Path(
     os.environ.get("SLACK_FILE_CACHE_DIR")
     or os.environ.get("SLACK_IMAGE_CACHE_DIR")  # back-compat with the images-only name
-    or "/tmp/golem-slack-files"
+    or "/tmp/slack-channel-files"
 )
 
 
@@ -1050,8 +1049,8 @@ async def _resolve_user(user_id: str) -> str:
         info = await _read_client.users_info(user=user_id)
         profile = info["user"]["profile"]
         # Fall back to the username before the raw ID: external / Slack Connect
-        # users (e.g. HKU collaborators) often have empty display_name/real_name
-        # but still carry a "name" like "yufan.liu", which is what people type.
+        # Slack Connect users often have empty display_name/real_name but still
+        # carry a username, which is what people type.
         name = (
             profile.get("display_name")
             or info["user"].get("real_name")
@@ -1107,8 +1106,8 @@ async def _main() -> None:
     _slack_client = AsyncWebClient(token=bot_token)
 
     # Reads (history, channels, DMs) use the user token if provided so they see
-    # everything Oded can see — including DMs the bot was never invited to.
-    # Writes and reactions stay on the bot token above (messages post as @Golem).
+    # everything the authorizing user can see, including DMs unavailable to the bot.
+    # Writes and reactions stay on the bot token above.
     user_token = os.environ.get("SLACK_USER_TOKEN")
     _search_client = AsyncWebClient(token=user_token) if user_token else None
     _read_client = _search_client or _slack_client
@@ -1139,7 +1138,7 @@ async def _main() -> None:
                 "Slack channel plugin — outbound only. Use the reply tool to post to a "
                 "channel or thread, and read_history / search_messages / get_thread to read. This server "
                 "does not listen for Slack messages and will never push anything to you; "
-                "inbound Slack is handled by QM. Threads you reply in are tracked per "
+                "inbound Slack is handled outside this plugin. Threads you reply in are tracked per "
                 "conversation and survive --resume."
             ),
         )

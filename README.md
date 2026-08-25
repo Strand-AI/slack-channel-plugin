@@ -2,14 +2,14 @@
 
 Outbound Slack MCP server for Claude Code and other MCP clients. It sends messages and
 reactions, reads conversations and files, and searches workspace message history. It does
-not listen for inbound Slack events; QM handles inbound Slack.
+not listen for inbound Slack events; another service must handle inbound Slack.
 
 ## Capabilities
 
 - Bot-authored messages and reactions
 - Reads across the channels and DMs visible to the configured Slack user
 - True workspace-wide historical search through Slack's `search.messages` API
-- Human-readable channel and DM references such as `#engineering`, `@Yue`, and `yufan`
+- Human-readable channel and DM references such as `#engineering`, `@alice`, and `alice`
 - On-demand download of Slack file attachments
 - Per-conversation tracking of threads created through `reply`
 
@@ -126,7 +126,7 @@ and updating the token completes the authorization.
 
 ```text
 roadmap
-"clinical validation" in:project-lattice
+"launch plan" in:project-alpha
 from:alice after:2026-07-01 before:2026-08-01
 has:link in:engineering
 ```
@@ -160,9 +160,9 @@ Tools that take a `channel` argument accept human-readable references and Slack 
 |------------|---------|
 | Channel label | `#engineering` |
 | Channel name | `engineering` |
-| DM label | `@Yue` |
-| Person name | `Yue` |
-| Distinctive DM/group-DM substring | `yufan` |
+| DM label | `@Alice` |
+| Person name | `Alice` |
+| Distinctive DM/group-DM substring | `alice` |
 | Slack ID | `C0AAWT14XT4` |
 
 Prefer names in agent workflows. `list_channels` prints copyable `use channel="..."` labels; IDs
